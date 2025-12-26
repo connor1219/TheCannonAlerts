@@ -1,0 +1,9 @@
+# Python bytecode
+__pycache__/
+
+# Python virtual environment
+venv/
+*.local
+
+# Firebase runtime config (contains sensitive data)
+.runtimeconfig.json

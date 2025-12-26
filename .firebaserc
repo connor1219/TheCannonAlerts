@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "thecannonmonitor"
+  },
+  "targets": {
+    "thecannonmonitor": {
+      "hosting": {
+        "app": [
+          "thecannonmonitor"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
