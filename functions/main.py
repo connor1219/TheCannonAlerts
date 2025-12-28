@@ -697,6 +697,15 @@ def create_subscription(req: https_fn.Request) -> https_fn.Response:
                     status=409,
                     headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
                 )
+        elif existing_subscription_result.get("overlap"):
+            # New subscription would overlap with existing one, causing duplicate notifications
+            return https_fn.Response(
+                json.dumps({
+                    "error": existing_subscription_result["overlap_details"]
+                }),
+                status=409,
+                headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
+            )
         else:
             subscription_document_reference = create_subscription_document(request_data)
             response_message = "Subscription created successfully"
@@ -782,8 +791,9 @@ def validate_subscription_data(data):
 def check_existing_subscription(data):
     """
     Check if a subscription already exists for the same email/webhook and preferences.
+    Also checks for overlapping subscriptions that would cause duplicate notifications.
     Supports both legacy single-value and new array-based preferences.
-    Returns: {"exists": bool, "disabled": bool, "subscription_id": str}
+    Returns: {"exists": bool, "disabled": bool, "subscription_id": str, "overlap": bool, "overlap_details": str}
     """
     try:
         db = get_firestore_client()
@@ -802,43 +812,80 @@ def check_existing_subscription(data):
         incoming_bedroom_prefs = data.get("bedroomPreferences")
         if incoming_bedroom_prefs is None:
             incoming_bedroom_prefs = [data.get("bedroomPreference", "ANY")]
-        incoming_bedroom_prefs = sorted(incoming_bedroom_prefs)
+        incoming_bedroom_prefs_set = set(incoming_bedroom_prefs)
         
         incoming_price_prefs = data.get("pricePreferences")
         if incoming_price_prefs is None:
             incoming_price_prefs = [data.get("pricePreference", "ANY")]
-        incoming_price_prefs = sorted(incoming_price_prefs)
+        incoming_price_prefs_set = set(incoming_price_prefs)
         
         docs = query.stream()
         
         for doc in docs:
             subscription_data = doc.to_dict()
             
+            # Skip disabled subscriptions for overlap check
+            if subscription_data.get('disabled') is not None:
+                continue
+            
             # Get existing subscription's preferences (support both formats)
             existing_bedroom_prefs = subscription_data.get('bedroomPreferences')
             if existing_bedroom_prefs is None:
                 existing_bedroom_prefs = [subscription_data.get('bedroomPreference', 'ANY')]
-            existing_bedroom_prefs = sorted(existing_bedroom_prefs)
+            existing_bedroom_prefs_set = set(existing_bedroom_prefs)
             
             existing_price_prefs = subscription_data.get('pricePreferences')
             if existing_price_prefs is None:
                 existing_price_prefs = [subscription_data.get('pricePreference', 'ANY')]
-            existing_price_prefs = sorted(existing_price_prefs)
+            existing_price_prefs_set = set(existing_price_prefs)
             
-            # Check if preferences match
-            if existing_bedroom_prefs == incoming_bedroom_prefs and existing_price_prefs == incoming_price_prefs:
-                disabled_timestamp = subscription_data.get('disabled')
+            # Check for exact match
+            if sorted(existing_bedroom_prefs) == sorted(incoming_bedroom_prefs) and \
+               sorted(existing_price_prefs) == sorted(incoming_price_prefs):
                 return {
                     "exists": True,
-                    "disabled": disabled_timestamp is not None,
-                    "subscription_id": doc.id
+                    "disabled": False,
+                    "subscription_id": doc.id,
+                    "overlap": False,
+                    "overlap_details": None
+                }
+            
+            # Check for overlapping preferences that would cause duplicate notifications
+            # Overlap occurs when there's intersection in both bedroom AND price preferences
+            # "ANY" overlaps with everything
+            bedroom_overlap = ('ANY' in incoming_bedroom_prefs_set or 
+                             'ANY' in existing_bedroom_prefs_set or 
+                             bool(incoming_bedroom_prefs_set & existing_bedroom_prefs_set))
+            
+            price_overlap = ('ANY' in incoming_price_prefs_set or 
+                           'ANY' in existing_price_prefs_set or 
+                           bool(incoming_price_prefs_set & existing_price_prefs_set))
+            
+            if bedroom_overlap and price_overlap:
+                # Calculate the overlapping values for the error message
+                if 'ANY' in incoming_bedroom_prefs_set or 'ANY' in existing_bedroom_prefs_set:
+                    bedroom_overlap_values = "all bedrooms"
+                else:
+                    bedroom_overlap_values = ", ".join(sorted(incoming_bedroom_prefs_set & existing_bedroom_prefs_set))
+                
+                if 'ANY' in incoming_price_prefs_set or 'ANY' in existing_price_prefs_set:
+                    price_overlap_values = "all prices"
+                else:
+                    price_overlap_values = ", ".join(sorted(incoming_price_prefs_set & existing_price_prefs_set))
+                
+                return {
+                    "exists": False,
+                    "disabled": False,
+                    "subscription_id": None,
+                    "overlap": True,
+                    "overlap_details": f"Your new subscription overlaps with an existing one. Overlapping filters: bedrooms ({bedroom_overlap_values}), prices ({price_overlap_values}). Please modify your existing subscription or choose non-overlapping filters."
                 }
         
-        return {"exists": False, "disabled": False, "subscription_id": None}
+        return {"exists": False, "disabled": False, "subscription_id": None, "overlap": False, "overlap_details": None}
         
     except Exception as e:
         print(f"Error checking existing subscription: {e}")
-        return {"exists": False, "disabled": False, "subscription_id": None}
+        return {"exists": False, "disabled": False, "subscription_id": None, "overlap": False, "overlap_details": None}
 
 def renable_subscription(subscription_id):
     """
