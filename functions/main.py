@@ -904,7 +904,7 @@ def check_existing_subscription(data):
                     "disabled": False,
                     "subscription_id": None,
                     "overlap": True,
-                    "overlap_details": f"This subscription overlaps with an existing one. Overlapping: {bedroom_overlap_str} at {price_overlap_str}. Modify your filters to avoid overlap."
+                    "overlap_details": f"Your new subscription overlaps with an existing one. Overlapping filters: bedrooms ({bedroom_overlap_values}), prices ({price_overlap_values}). Please choose non-overlapping filters."
                 }
         
         return {"exists": False, "disabled": False, "subscription_id": None, "overlap": False, "overlap_details": None}

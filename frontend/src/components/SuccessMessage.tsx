@@ -137,7 +137,6 @@ export function SuccessMessage({ contactMethod, onReset }: SuccessMessageProps) 
           >
             <div>We&apos;ll monitor TheCannon for new listings</div>
             <div>When a match is found, you&apos;ll get notified instantly</div>
-            <div>You can create multiple alerts with different preferences</div>
           </Typography>
         </Box>
       </Box>
