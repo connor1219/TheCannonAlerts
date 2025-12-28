@@ -36,8 +36,8 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
       type: 'EMAIL',
       email: '',
       webhookUrl: '',
-      bedroomPreference: 'ANY',
-      pricePreference: 'ANY',
+      bedroomPreferences: ['ANY'],
+      pricePreferences: ['ANY'],
     },
   });
 

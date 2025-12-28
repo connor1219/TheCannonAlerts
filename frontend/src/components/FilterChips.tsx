@@ -1,14 +1,14 @@
 import React from 'react';
 import { Box, Chip, Typography } from '@mui/material';
 import { Control, Controller } from 'react-hook-form';
-import { SubscriptionFormData } from '../schemas/subscriptionSchema';
+import { SubscriptionFormData, BedroomValue, PriceValue } from '../schemas/subscriptionSchema';
 
 interface FilterChipsProps {
   control: Control<SubscriptionFormData>;
   type: 'bedroom' | 'price';
 }
 
-const bedroomOptions = [
+const bedroomOptions: { value: BedroomValue; label: string }[] = [
   { value: 'ANY', label: 'Any' },
   { value: 'B1', label: '1' },
   { value: 'B2', label: '2' },
@@ -17,7 +17,7 @@ const bedroomOptions = [
   { value: 'B5_PLUS', label: '5+' },
 ];
 
-const priceOptions = [
+const priceOptions: { value: PriceValue; label: string }[] = [
   { value: 'ANY', label: 'Any' },
   { value: 'P0_399', label: '$0–399' },
   { value: 'P400_699', label: '$400–699' },
@@ -28,7 +28,7 @@ const priceOptions = [
 
 export function FilterChips({ control, type }: FilterChipsProps) {
   const options = type === 'bedroom' ? bedroomOptions : priceOptions;
-  const fieldName = type === 'bedroom' ? 'bedroomPreference' : 'pricePreference';
+  const fieldName = type === 'bedroom' ? 'bedroomPreferences' : 'pricePreferences' as const;
   const sectionTitle = type === 'bedroom' ? 'BEDROOMS' : 'PRICE RANGE';
 
   return (
@@ -49,25 +49,52 @@ export function FilterChips({ control, type }: FilterChipsProps) {
       </Typography>
       
       <Controller
-        name={fieldName as keyof SubscriptionFormData}
+        name={fieldName}
         control={control}
-        render={({ field }) => (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-            {options.map((option) => (
-              <Chip
-                key={option.value}
-                label={option.label}
-                clickable
-                variant={field.value === option.value ? 'filled' : 'outlined'}
-                onClick={() => field.onChange(option.value)}
-                sx={{
-                  minWidth: type === 'bedroom' ? 48 : 'auto',
-                  px: type === 'bedroom' ? 1 : 2,
-                }}
-              />
-            ))}
-          </Box>
-        )}
+        render={({ field }) => {
+          const selectedValues = (field.value || ['ANY']) as string[];
+          
+          const handleToggle = (value: string) => {
+            const currentValues = [...selectedValues];
+            const isSelected = currentValues.includes(value);
+            
+            if (value === 'ANY') {
+              // If clicking ANY, select only ANY
+              field.onChange(['ANY']);
+            } else if (isSelected) {
+              // If unselecting a non-ANY option
+              const newValues = currentValues.filter(v => v !== value);
+              // If nothing left selected, default to ANY
+              field.onChange(newValues.length === 0 ? ['ANY'] : newValues);
+            } else {
+              // If selecting a non-ANY option, remove ANY and add the new value
+              const newValues = currentValues.filter(v => v !== 'ANY');
+              newValues.push(value);
+              field.onChange(newValues);
+            }
+          };
+          
+          return (
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+              {options.map((option) => {
+                const isSelected = selectedValues.includes(option.value);
+                return (
+                  <Chip
+                    key={option.value}
+                    label={option.label}
+                    clickable
+                    variant={isSelected ? 'filled' : 'outlined'}
+                    onClick={() => handleToggle(option.value)}
+                    sx={{
+                      minWidth: type === 'bedroom' ? 48 : 'auto',
+                      px: type === 'bedroom' ? 1 : 2,
+                    }}
+                  />
+                );
+              })}
+            </Box>
+          );
+        }}
       />
     </Box>
   );
