@@ -1006,7 +1006,7 @@ def scheduled_listing_ingestion(event: scheduler_fn.ScheduledEvent) -> None:
 
 @https_fn.on_request()
 def get_stats(req: https_fn.Request) -> https_fn.Response:
-    """Get application statistics including subscriber count and notifications sent."""
+    """Get application statistics including unique subscriber count and notifications sent."""
     if req.method == 'OPTIONS':
         return https_fn.Response(
             '',
@@ -1021,9 +1021,25 @@ def get_stats(req: https_fn.Request) -> https_fn.Response:
     try:
         db = get_firestore_client()
         
+        # Count unique subscribers by email and webhook URL
         subscribers_ref = db.collection('subscriptions')
         subscribers_query = subscribers_ref.where(filter=FieldFilter('disabled', '==', None))
-        total_subscribers = len(list(subscribers_query.stream()))
+        
+        unique_emails = set()
+        unique_webhooks = set()
+        
+        for doc in subscribers_query.stream():
+            subscription_data = doc.to_dict()
+            email = subscription_data.get('email')
+            webhook_url = subscription_data.get('webhookUrl')
+            
+            if email:
+                unique_emails.add(email.lower())
+            if webhook_url:
+                unique_webhooks.add(webhook_url)
+        
+        # Total unique subscribers = unique emails + unique webhooks
+        total_subscribers = len(unique_emails) + len(unique_webhooks)
         
         ingestion_runs_ref = db.collection('ingestion_runs')
         total_notifications_sent = 0
