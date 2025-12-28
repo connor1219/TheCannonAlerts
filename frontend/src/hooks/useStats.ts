@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 
 interface Stats {
   totalSubscribers: number;
@@ -9,6 +9,7 @@ interface UseStatsReturn {
   stats: Stats | null;
   loading: boolean;
   error: string | null;
+  refetch: () => Promise<void>;
 }
 
 export function useStats(): UseStatsReturn {
@@ -22,37 +23,37 @@ export function useStats(): UseStatsReturn {
       : `https://us-central1-thecannonmonitor.cloudfunctions.net/${functionName}`;
   };
 
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        setLoading(true);
-        setError(null);
+  const fetchStats = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
 
-        const response = await fetch(getFirebaseFunctionUrl('get_stats'));
+      const response = await fetch(getFirebaseFunctionUrl('get_stats'));
 
-        if (!response.ok) {
-          throw new Error(`Failed to fetch stats: ${response.status}`);
-        }
-
-        const data = await response.json();
-        setStats({
-          totalSubscribers: data.total_subscribers || 0,
-          totalNotificationsSent: data.total_notifications_sent || 0,
-        });
-      } catch (err) {
-        console.error('Error fetching stats:', err);
-        setError(err instanceof Error ? err.message : 'Failed to fetch statistics');
-        setStats({
-          totalSubscribers: 0,
-          totalNotificationsSent: 0,
-        });
-      } finally {
-        setLoading(false);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch stats: ${response.status}`);
       }
-    };
 
-    fetchStats();
+      const data = await response.json();
+      setStats({
+        totalSubscribers: data.total_subscribers || 0,
+        totalNotificationsSent: data.total_notifications_sent || 0,
+      });
+    } catch (err) {
+      console.error('Error fetching stats:', err);
+      setError(err instanceof Error ? err.message : 'Failed to fetch statistics');
+      setStats({
+        totalSubscribers: 0,
+        totalNotificationsSent: 0,
+      });
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  return { stats, loading, error };
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
+
+  return { stats, loading, error, refetch: fetchStats };
 }
