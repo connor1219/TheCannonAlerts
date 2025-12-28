@@ -386,7 +386,9 @@ def send_webhook_notification(subscription, listing_data):
 
 def send_notifications_for_listing(listing_data):
     """
-    Find matching subscriptions and send notifications
+    Find matching subscriptions and send notifications.
+    Deduplicates by email/webhook to prevent sending multiple notifications
+    to the same recipient for the same listing.
     """
     try:
         matching_subscriptions = find_matching_subscriptions(listing_data)
@@ -394,10 +396,28 @@ def send_notifications_for_listing(listing_data):
         if not matching_subscriptions:
             return {"sent": 0, "errors": 0}
         
+        # Deduplicate subscriptions by email/webhook
+        # Use the first matching subscription for each unique recipient
+        seen_emails = set()
+        seen_webhooks = set()
+        unique_subscriptions = []
+        
+        for subscription in matching_subscriptions:
+            if subscription['type'] == 'EMAIL':
+                email = subscription.get('email', '').lower()
+                if email and email not in seen_emails:
+                    seen_emails.add(email)
+                    unique_subscriptions.append(subscription)
+            elif subscription['type'] == 'WEBHOOK':
+                webhook_url = subscription.get('webhookUrl', '')
+                if webhook_url and webhook_url not in seen_webhooks:
+                    seen_webhooks.add(webhook_url)
+                    unique_subscriptions.append(subscription)
+        
         sent_count = 0
         error_count = 0
         
-        for subscription in matching_subscriptions:
+        for subscription in unique_subscriptions:
             try:
                 if subscription['type'] == 'EMAIL':
                     success = send_email_notification(subscription, listing_data)
@@ -691,14 +711,13 @@ def create_subscription(req: https_fn.Request) -> https_fn.Response:
             else:
                 return https_fn.Response(
                     json.dumps({
-                        "error": "You already have an active subscription with these preferences",
+                        "error": "You already have an active subscription with these exact preferences",
                         "existing_subscription_id": existing_subscription_result["subscription_id"]
                     }),
                     status=409,
                     headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
                 )
         elif existing_subscription_result.get("overlap"):
-            # New subscription would overlap with existing one, causing duplicate notifications
             return https_fn.Response(
                 json.dumps({
                     "error": existing_subscription_result["overlap_details"]
@@ -792,6 +811,11 @@ def check_existing_subscription(data):
     """
     Check if a subscription already exists for the same email/webhook and preferences.
     Also checks for overlapping subscriptions that would cause duplicate notifications.
+    
+    Overlap occurs when a listing could match BOTH subscriptions, which happens when:
+    - There's at least one bedroom value in common (or either has ANY)
+    - AND there's at least one price value in common (or either has ANY)
+    
     Supports both legacy single-value and new array-based preferences.
     Returns: {"exists": bool, "disabled": bool, "subscription_id": str, "overlap": bool, "overlap_details": str}
     """
@@ -800,7 +824,6 @@ def check_existing_subscription(data):
         subscriptions_ref = db.collection('subscriptions')
         
         # Query by email/webhook and type only, then filter by preferences in code
-        # (Firestore doesn't support array equality queries well)
         if data["type"] == "EMAIL":
             query = subscriptions_ref.where('email', '==', data["email"])
         else:
@@ -812,19 +835,19 @@ def check_existing_subscription(data):
         incoming_bedroom_prefs = data.get("bedroomPreferences")
         if incoming_bedroom_prefs is None:
             incoming_bedroom_prefs = [data.get("bedroomPreference", "ANY")]
-        incoming_bedroom_prefs_set = set(incoming_bedroom_prefs)
+        incoming_bedroom_set = set(incoming_bedroom_prefs)
         
         incoming_price_prefs = data.get("pricePreferences")
         if incoming_price_prefs is None:
             incoming_price_prefs = [data.get("pricePreference", "ANY")]
-        incoming_price_prefs_set = set(incoming_price_prefs)
+        incoming_price_set = set(incoming_price_prefs)
         
         docs = query.stream()
         
         for doc in docs:
             subscription_data = doc.to_dict()
             
-            # Skip disabled subscriptions for overlap check
+            # Skip disabled subscriptions
             if subscription_data.get('disabled') is not None:
                 continue
             
@@ -832,14 +855,14 @@ def check_existing_subscription(data):
             existing_bedroom_prefs = subscription_data.get('bedroomPreferences')
             if existing_bedroom_prefs is None:
                 existing_bedroom_prefs = [subscription_data.get('bedroomPreference', 'ANY')]
-            existing_bedroom_prefs_set = set(existing_bedroom_prefs)
+            existing_bedroom_set = set(existing_bedroom_prefs)
             
             existing_price_prefs = subscription_data.get('pricePreferences')
             if existing_price_prefs is None:
                 existing_price_prefs = [subscription_data.get('pricePreference', 'ANY')]
-            existing_price_prefs_set = set(existing_price_prefs)
+            existing_price_set = set(existing_price_prefs)
             
-            # Check for exact match
+            # Check for exact match (same filters)
             if sorted(existing_bedroom_prefs) == sorted(incoming_bedroom_prefs) and \
                sorted(existing_price_prefs) == sorted(incoming_price_prefs):
                 return {
@@ -850,35 +873,38 @@ def check_existing_subscription(data):
                     "overlap_details": None
                 }
             
-            # Check for overlapping preferences that would cause duplicate notifications
-            # Overlap occurs when there's intersection in both bedroom AND price preferences
-            # "ANY" overlaps with everything
-            bedroom_overlap = ('ANY' in incoming_bedroom_prefs_set or 
-                             'ANY' in existing_bedroom_prefs_set or 
-                             bool(incoming_bedroom_prefs_set & existing_bedroom_prefs_set))
+            # Check for overlapping preferences
+            # Overlap in bedrooms: either has ANY, or there's intersection
+            has_bedroom_overlap = ('ANY' in incoming_bedroom_set or 
+                                  'ANY' in existing_bedroom_set or 
+                                  bool(incoming_bedroom_set & existing_bedroom_set))
             
-            price_overlap = ('ANY' in incoming_price_prefs_set or 
-                           'ANY' in existing_price_prefs_set or 
-                           bool(incoming_price_prefs_set & existing_price_prefs_set))
+            # Overlap in prices: either has ANY, or there's intersection
+            has_price_overlap = ('ANY' in incoming_price_set or 
+                                'ANY' in existing_price_set or 
+                                bool(incoming_price_set & existing_price_set))
             
-            if bedroom_overlap and price_overlap:
-                # Calculate the overlapping values for the error message
-                if 'ANY' in incoming_bedroom_prefs_set or 'ANY' in existing_bedroom_prefs_set:
-                    bedroom_overlap_values = "all bedrooms"
+            # Only block if BOTH dimensions overlap (a listing could match both subscriptions)
+            if has_bedroom_overlap and has_price_overlap:
+                # Build helpful error message
+                if 'ANY' in incoming_bedroom_set or 'ANY' in existing_bedroom_set:
+                    bedroom_overlap_str = "any bedrooms"
                 else:
-                    bedroom_overlap_values = ", ".join(sorted(incoming_bedroom_prefs_set & existing_bedroom_prefs_set))
+                    overlap_bedrooms = incoming_bedroom_set & existing_bedroom_set
+                    bedroom_overlap_str = ", ".join(sorted(overlap_bedrooms))
                 
-                if 'ANY' in incoming_price_prefs_set or 'ANY' in existing_price_prefs_set:
-                    price_overlap_values = "all prices"
+                if 'ANY' in incoming_price_set or 'ANY' in existing_price_set:
+                    price_overlap_str = "any price"
                 else:
-                    price_overlap_values = ", ".join(sorted(incoming_price_prefs_set & existing_price_prefs_set))
+                    overlap_prices = incoming_price_set & existing_price_set
+                    price_overlap_str = ", ".join(sorted(overlap_prices))
                 
                 return {
                     "exists": False,
                     "disabled": False,
                     "subscription_id": None,
                     "overlap": True,
-                    "overlap_details": f"Your new subscription overlaps with an existing one. Overlapping filters: bedrooms ({bedroom_overlap_values}), prices ({price_overlap_values}). Please modify your existing subscription or choose non-overlapping filters."
+                    "overlap_details": f"This subscription overlaps with an existing one. Overlapping: {bedroom_overlap_str} at {price_overlap_str}. Modify your filters to avoid overlap."
                 }
         
         return {"exists": False, "disabled": False, "subscription_id": None, "overlap": False, "overlap_details": None}
