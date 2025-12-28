@@ -130,8 +130,8 @@ export const theme = createTheme({
             color: '#9CA3AF',
             transition: 'none !important',
             '&:hover': {
-              backgroundColor: 'rgba(56, 189, 248, 0.1) !important',
-              borderColor: '#38BDF8 !important',
+              backgroundColor: 'rgba(234, 179, 8, 0.1) !important',
+              borderColor: '#EAB308 !important',
               transition: 'none !important',
             },
           },
@@ -158,7 +158,7 @@ export const theme = createTheme({
               borderColor: '#374151',
             },
             '&:hover fieldset': {
-              borderColor: '#38BDF8',
+              borderColor: '#EAB308',
             },
             '&.Mui-focused fieldset': {
               borderColor: '#EAB308',

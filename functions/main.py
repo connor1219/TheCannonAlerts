@@ -88,7 +88,8 @@ def get_active_subscriptions():
 
 def find_matching_subscriptions(listing_data):
     """
-    Find subscriptions that match the given listing
+    Find subscriptions that match the given listing.
+    Supports both legacy single-value preferences and new array-based preferences.
     """
     matching_subscriptions = []
     active_subscriptions = get_active_subscriptions()
@@ -97,12 +98,19 @@ def find_matching_subscriptions(listing_data):
     listing_price_bucket = listing_data.get('price_bucket')
     
     for subscription in active_subscriptions:
-        bedroom_pref = subscription.get('bedroomPreference', 'ANY')
-        price_pref = subscription.get('pricePreference', 'ANY')
+        # Support both legacy (single value) and new (array) formats
+        bedroom_prefs = subscription.get('bedroomPreferences')
+        if bedroom_prefs is None:
+            # Legacy format - convert single value to list
+            bedroom_prefs = [subscription.get('bedroomPreference', 'ANY')]
         
-        bedroom_match = (bedroom_pref == 'ANY' or bedroom_pref == listing_bedroom_bucket)
+        price_prefs = subscription.get('pricePreferences')
+        if price_prefs is None:
+            # Legacy format - convert single value to list
+            price_prefs = [subscription.get('pricePreference', 'ANY')]
         
-        price_match = (price_pref == 'ANY' or price_pref == listing_price_bucket)
+        bedroom_match = ('ANY' in bedroom_prefs or listing_bedroom_bucket in bedroom_prefs)
+        price_match = ('ANY' in price_prefs or listing_price_bucket in price_prefs)
         
         if bedroom_match and price_match:
             matching_subscriptions.append(subscription)
@@ -139,18 +147,30 @@ def render_email_via_api(listing_data, subscription):
     Call the Next.js API to render the React Email template
     """
     try:
-        sub_bedrooms = subscription.get('bedroomPreference', 'ANY')
-        sub_price = subscription.get('pricePreference', 'ANY')
+        # Support both legacy (single value) and new (array) formats
+        bedroom_prefs = subscription.get('bedroomPreferences')
+        if bedroom_prefs is None:
+            bedroom_prefs = [subscription.get('bedroomPreference', 'ANY')]
         
-        if sub_bedrooms == 'ANY':
+        price_prefs = subscription.get('pricePreferences')
+        if price_prefs is None:
+            price_prefs = [subscription.get('pricePreference', 'ANY')]
+        
+        # Format bedroom preferences for display
+        if 'ANY' in bedroom_prefs:
             readable_sub_bedrooms = 'Any'
+        elif len(bedroom_prefs) == 1:
+            readable_sub_bedrooms = get_readable_bedrooms(bedroom_prefs[0])
         else:
-            readable_sub_bedrooms = get_readable_bedrooms(sub_bedrooms)
+            readable_sub_bedrooms = ', '.join([get_readable_bedrooms(b) for b in bedroom_prefs])
         
-        if sub_price == 'ANY':
+        # Format price preferences for display
+        if 'ANY' in price_prefs:
             readable_sub_price = 'Any price'
+        elif len(price_prefs) == 1:
+            readable_sub_price = get_readable_price_range(price_prefs[0])
         else:
-            readable_sub_price = get_readable_price_range(sub_price)
+            readable_sub_price = ', '.join([get_readable_price_range(p) for p in price_prefs])
         
         email_props = {
             'price': listing_data.get('price_string', f'${listing_data.get("price_int", "Unknown")}'),
@@ -618,10 +638,13 @@ def create_subscription(req: https_fn.Request) -> https_fn.Response:
         "type": "EMAIL" | "WEBHOOK",
         "email": "user@example.com" (required if type is EMAIL),
         "webhookUrl": "https://example.com/webhook" (required if type is WEBHOOK),
-        "bedroomPreference": "ANY" | "B1" | "B2" | "B3" | "B4" | "B5_PLUS",
-        "pricePreference": "ANY" | "P0_399" | "P400_699" | "P700_999" | "P1000_1499" | "P1500_PLUS",
+        "bedroomPreferences": ["ANY"] | ["B1", "B2", ...] (array of bedroom preferences),
+        "pricePreferences": ["ANY"] | ["P0_399", "P400_699", ...] (array of price preferences),
         "userId": "optional-user-id" (for user-based doc IDs)
     }
+    
+    Note: Legacy single-value format (bedroomPreference, pricePreference) is still supported
+    for backwards compatibility but new subscriptions should use the array format.
     """
     
     if req.method == 'OPTIONS':
@@ -674,6 +697,15 @@ def create_subscription(req: https_fn.Request) -> https_fn.Response:
                     status=409,
                     headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
                 )
+        elif existing_subscription_result.get("overlap"):
+            # New subscription would overlap with existing one, causing duplicate notifications
+            return https_fn.Response(
+                json.dumps({
+                    "error": existing_subscription_result["overlap_details"]
+                }),
+                status=409,
+                headers={"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}
+            )
         else:
             subscription_document_reference = create_subscription_document(request_data)
             response_message = "Subscription created successfully"
@@ -701,6 +733,7 @@ def validate_subscription_data(data):
     """
     Validate subscription data
     Returns: {"error": None} if valid, {"error": "message"} if invalid
+    Supports both legacy single-value and new array-based preferences.
     """
     
     VALID_TYPES = ["EMAIL", "WEBHOOK"]
@@ -725,51 +758,134 @@ def validate_subscription_data(data):
         if not data["webhookUrl"].startswith(("http://", "https://")):
             return {"error": "Invalid webhook URL format"}
     
-    bedroom_pref = data.get("bedroomPreference", "ANY")
-    if bedroom_pref not in VALID_BEDROOM_PREFS:
-        return {"error": f"Invalid bedroomPreference. Must be one of: {', '.join(VALID_BEDROOM_PREFS)}"}
+    # Support both legacy (single value) and new (array) formats for bedroom preferences
+    bedroom_prefs = data.get("bedroomPreferences")
+    if bedroom_prefs is not None:
+        if not isinstance(bedroom_prefs, list) or len(bedroom_prefs) == 0:
+            return {"error": "bedroomPreferences must be a non-empty array"}
+        for pref in bedroom_prefs:
+            if pref not in VALID_BEDROOM_PREFS:
+                return {"error": f"Invalid bedroom preference '{pref}'. Must be one of: {', '.join(VALID_BEDROOM_PREFS)}"}
+    else:
+        # Legacy single value format
+        bedroom_pref = data.get("bedroomPreference", "ANY")
+        if bedroom_pref not in VALID_BEDROOM_PREFS:
+            return {"error": f"Invalid bedroomPreference. Must be one of: {', '.join(VALID_BEDROOM_PREFS)}"}
     
-    price_pref = data.get("pricePreference", "ANY")
-    if price_pref not in VALID_PRICE_PREFS:
-        return {"error": f"Invalid pricePreference. Must be one of: {', '.join(VALID_PRICE_PREFS)}"}
+    # Support both legacy (single value) and new (array) formats for price preferences
+    price_prefs = data.get("pricePreferences")
+    if price_prefs is not None:
+        if not isinstance(price_prefs, list) or len(price_prefs) == 0:
+            return {"error": "pricePreferences must be a non-empty array"}
+        for pref in price_prefs:
+            if pref not in VALID_PRICE_PREFS:
+                return {"error": f"Invalid price preference '{pref}'. Must be one of: {', '.join(VALID_PRICE_PREFS)}"}
+    else:
+        # Legacy single value format
+        price_pref = data.get("pricePreference", "ANY")
+        if price_pref not in VALID_PRICE_PREFS:
+            return {"error": f"Invalid pricePreference. Must be one of: {', '.join(VALID_PRICE_PREFS)}"}
     
     return {"error": None}
 
 def check_existing_subscription(data):
     """
-    Check if a subscription already exists for the same email/webhook and preferences
-    Returns: {"exists": bool, "disabled": bool, "subscription_id": str}
+    Check if a subscription already exists for the same email/webhook and preferences.
+    Also checks for overlapping subscriptions that would cause duplicate notifications.
+    Supports both legacy single-value and new array-based preferences.
+    Returns: {"exists": bool, "disabled": bool, "subscription_id": str, "overlap": bool, "overlap_details": str}
     """
     try:
         db = get_firestore_client()
         subscriptions_ref = db.collection('subscriptions')
         
+        # Query by email/webhook and type only, then filter by preferences in code
+        # (Firestore doesn't support array equality queries well)
         if data["type"] == "EMAIL":
             query = subscriptions_ref.where('email', '==', data["email"])
         else:
             query = subscriptions_ref.where('webhookUrl', '==', data["webhookUrl"])
         
-        query = query.where('bedroomPreference', '==', data.get("bedroomPreference", "ANY"))
-        query = query.where('pricePreference', '==', data.get("pricePreference", "ANY"))
         query = query.where('type', '==', data["type"])
+        
+        # Get the preferences from the incoming data (support both formats)
+        incoming_bedroom_prefs = data.get("bedroomPreferences")
+        if incoming_bedroom_prefs is None:
+            incoming_bedroom_prefs = [data.get("bedroomPreference", "ANY")]
+        incoming_bedroom_prefs_set = set(incoming_bedroom_prefs)
+        
+        incoming_price_prefs = data.get("pricePreferences")
+        if incoming_price_prefs is None:
+            incoming_price_prefs = [data.get("pricePreference", "ANY")]
+        incoming_price_prefs_set = set(incoming_price_prefs)
         
         docs = query.stream()
         
         for doc in docs:
             subscription_data = doc.to_dict()
-            disabled_timestamp = subscription_data.get('disabled')
             
-            return {
-                "exists": True,
-                "disabled": disabled_timestamp is not None,
-                "subscription_id": doc.id
-            }
+            # Skip disabled subscriptions for overlap check
+            if subscription_data.get('disabled') is not None:
+                continue
+            
+            # Get existing subscription's preferences (support both formats)
+            existing_bedroom_prefs = subscription_data.get('bedroomPreferences')
+            if existing_bedroom_prefs is None:
+                existing_bedroom_prefs = [subscription_data.get('bedroomPreference', 'ANY')]
+            existing_bedroom_prefs_set = set(existing_bedroom_prefs)
+            
+            existing_price_prefs = subscription_data.get('pricePreferences')
+            if existing_price_prefs is None:
+                existing_price_prefs = [subscription_data.get('pricePreference', 'ANY')]
+            existing_price_prefs_set = set(existing_price_prefs)
+            
+            # Check for exact match
+            if sorted(existing_bedroom_prefs) == sorted(incoming_bedroom_prefs) and \
+               sorted(existing_price_prefs) == sorted(incoming_price_prefs):
+                return {
+                    "exists": True,
+                    "disabled": False,
+                    "subscription_id": doc.id,
+                    "overlap": False,
+                    "overlap_details": None
+                }
+            
+            # Check for overlapping preferences that would cause duplicate notifications
+            # Overlap occurs when there's intersection in both bedroom AND price preferences
+            # "ANY" overlaps with everything
+            bedroom_overlap = ('ANY' in incoming_bedroom_prefs_set or 
+                             'ANY' in existing_bedroom_prefs_set or 
+                             bool(incoming_bedroom_prefs_set & existing_bedroom_prefs_set))
+            
+            price_overlap = ('ANY' in incoming_price_prefs_set or 
+                           'ANY' in existing_price_prefs_set or 
+                           bool(incoming_price_prefs_set & existing_price_prefs_set))
+            
+            if bedroom_overlap and price_overlap:
+                # Calculate the overlapping values for the error message
+                if 'ANY' in incoming_bedroom_prefs_set or 'ANY' in existing_bedroom_prefs_set:
+                    bedroom_overlap_values = "all bedrooms"
+                else:
+                    bedroom_overlap_values = ", ".join(sorted(incoming_bedroom_prefs_set & existing_bedroom_prefs_set))
+                
+                if 'ANY' in incoming_price_prefs_set or 'ANY' in existing_price_prefs_set:
+                    price_overlap_values = "all prices"
+                else:
+                    price_overlap_values = ", ".join(sorted(incoming_price_prefs_set & existing_price_prefs_set))
+                
+                return {
+                    "exists": False,
+                    "disabled": False,
+                    "subscription_id": None,
+                    "overlap": True,
+                    "overlap_details": f"Your new subscription overlaps with an existing one. Overlapping filters: bedrooms ({bedroom_overlap_values}), prices ({price_overlap_values}). Please modify your existing subscription or choose non-overlapping filters."
+                }
         
-        return {"exists": False, "disabled": False, "subscription_id": None}
+        return {"exists": False, "disabled": False, "subscription_id": None, "overlap": False, "overlap_details": None}
         
     except Exception as e:
         print(f"Error checking existing subscription: {e}")
-        return {"exists": False, "disabled": False, "subscription_id": None}
+        return {"exists": False, "disabled": False, "subscription_id": None, "overlap": False, "overlap_details": None}
 
 def renable_subscription(subscription_id):
     """
@@ -791,15 +907,25 @@ def renable_subscription(subscription_id):
 
 def create_subscription_document(data):
     """
-    Create subscription document in Firestore
+    Create subscription document in Firestore.
+    Stores preferences in the new array format.
     Returns: document reference
-    """    
+    """
+    # Convert to array format if legacy single-value format is used
+    bedroom_prefs = data.get("bedroomPreferences")
+    if bedroom_prefs is None:
+        bedroom_prefs = [data.get("bedroomPreference", "ANY")]
+    
+    price_prefs = data.get("pricePreferences")
+    if price_prefs is None:
+        price_prefs = [data.get("pricePreference", "ANY")]
+    
     subscription_data = {
         "type": data["type"],
         "email": data.get("email"),
         "webhookUrl": data.get("webhookUrl"),
-        "bedroomPreference": data.get("bedroomPreference", "ANY"),
-        "pricePreference": data.get("pricePreference", "ANY"),
+        "bedroomPreferences": bedroom_prefs,
+        "pricePreferences": price_prefs,
         "disabled": None,
         "createdAt": datetime.now()
     }
@@ -927,7 +1053,7 @@ def scheduled_listing_ingestion(event: scheduler_fn.ScheduledEvent) -> None:
 
 @https_fn.on_request()
 def get_stats(req: https_fn.Request) -> https_fn.Response:
-    """Get application statistics including subscriber count and notifications sent."""
+    """Get application statistics including unique subscriber count and notifications sent."""
     if req.method == 'OPTIONS':
         return https_fn.Response(
             '',
@@ -942,9 +1068,25 @@ def get_stats(req: https_fn.Request) -> https_fn.Response:
     try:
         db = get_firestore_client()
         
+        # Count unique subscribers by email and webhook URL
         subscribers_ref = db.collection('subscriptions')
         subscribers_query = subscribers_ref.where(filter=FieldFilter('disabled', '==', None))
-        total_subscribers = len(list(subscribers_query.stream()))
+        
+        unique_emails = set()
+        unique_webhooks = set()
+        
+        for doc in subscribers_query.stream():
+            subscription_data = doc.to_dict()
+            email = subscription_data.get('email')
+            webhook_url = subscription_data.get('webhookUrl')
+            
+            if email:
+                unique_emails.add(email.lower())
+            if webhook_url:
+                unique_webhooks.add(webhook_url)
+        
+        # Total unique subscribers = unique emails + unique webhooks
+        total_subscribers = len(unique_emails) + len(unique_webhooks)
         
         ingestion_runs_ref = db.collection('ingestion_runs')
         total_notifications_sent = 0
