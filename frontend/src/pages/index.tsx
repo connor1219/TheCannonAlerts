@@ -13,11 +13,17 @@ import { useStats } from '../hooks/useStats';
 export default function Home() {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [submittedData, setSubmittedData] = useState<SubscriptionFormData | null>(null);
-  const { stats, loading: statsLoading } = useStats();
+  const { stats, loading: statsLoading, refetch: refetchStats } = useStats();
 
-  const handleSubmit = (data: SubscriptionFormData) => {
+  const handleSubmit = async (data: SubscriptionFormData) => {
     setSubmittedData(data);
     setIsSubmitted(true);
+    // Refetch stats after successful subscription
+    try {
+      await refetchStats();
+    } catch (error) {
+      console.error('Failed to refetch stats:', error);
+    }
   };
 
   const handleReset = () => {
