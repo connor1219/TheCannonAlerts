@@ -172,13 +172,9 @@ firebase functions:secrets:set MAILGUN_API_KEY
 - `B4` - 4 bedrooms
 - `B5_PLUS` - 5+ bedrooms
 
-**Price Preferences:**
-- `ANY` - Any price
-- `P0_399` - $0 - $399
-- `P400_699` - $400 - $699
-- `P700_999` - $700 - $999
-- `P1000_1499` - $1000 - $1499
-- `P1500_PLUS` - $1500+
+**Price Range:**
+- Optional `minPrice` and `maxPrice` integer fields (dollars)
+- Leave blank for no bound (e.g. no min = any price below max)
 
 ## Development Notes
 
