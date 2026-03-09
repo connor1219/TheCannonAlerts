@@ -1,5 +1,5 @@
 import { onRequest } from 'firebase-functions/v2/https';
-import { renderTheCannonAlertEmail, TheCannonAlertEmailProps } from './emails/renderEmail';
+import { renderTheCannonAlertEmail, renderTheCannonDigestEmail, TheCannonAlertEmailProps, TheCannonDigestEmailProps } from './emails/renderEmail';
 import type { Request, Response } from 'express';
 
 function isValidProps(body: any): body is TheCannonAlertEmailProps {
@@ -8,6 +8,14 @@ function isValidProps(body: any): body is TheCannonAlertEmailProps {
     && typeof body.bedrooms === 'string'
     && typeof body.address === 'string'
     && typeof body.listingUrl === 'string'
+    && typeof body.subscriptionBedrooms === 'string'
+    && typeof body.subscriptionPriceRange === 'string';
+}
+
+function isValidDigestProps(body: any): body is TheCannonDigestEmailProps {
+  return Boolean(body)
+    && Array.isArray(body.listings)
+    && (body.digestType === 'daily' || body.digestType === 'weekly')
     && typeof body.subscriptionBedrooms === 'string'
     && typeof body.subscriptionPriceRange === 'string';
 }
@@ -42,6 +50,37 @@ export const renderEmail = onRequest((req: Request, res: Response) => {
   } catch (error) {
     console.error('Error rendering email:', error);
     res.status(500).json({ error: 'Failed to render email template' });
+  }
+});
+
+export const renderDigestEmail = onRequest((req: Request, res: Response) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+
+  try {
+    const emailProps = req.body;
+
+    if (!isValidDigestProps(emailProps)) {
+      res.status(400).json({
+        error: 'Missing or invalid required digest email props',
+        required: [
+          'listings (array)',
+          'digestType (daily|weekly)',
+          'subscriptionBedrooms',
+          'subscriptionPriceRange',
+        ],
+      });
+      return;
+    }
+
+    const html = renderTheCannonDigestEmail(emailProps);
+    res.setHeader('Content-Type', 'text/html');
+    res.status(200).send(html);
+  } catch (error) {
+    console.error('Error rendering digest email:', error);
+    res.status(500).json({ error: 'Failed to render digest email template' });
   }
 });
 
