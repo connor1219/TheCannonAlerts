@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Card,
   CardContent,
@@ -10,18 +10,26 @@ import {
 } from '@mui/material';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
+import { Turnstile, TurnstileInstance } from '@marsidev/react-turnstile';
 import { subscriptionSchema, SubscriptionFormData } from '../schemas/subscriptionSchema';
 import { ContactMethodToggle } from './ContactMethodToggle';
 import { ContactFieldGroup } from './ContactFieldGroup';
 import { FilterChips } from './FilterChips';
+import { FrequencyPicker } from './FrequencyPicker';
+
+// Cloudflare Turnstile site key
+const TURNSTILE_SITE_KEY = '0x4AAAAAACOduE7P7y7PKVqb';
 
 interface SubscriptionCardProps {
-  onSubmit: (data: SubscriptionFormData) => void;
+  onSubmit: (data: SubscriptionFormData, subscriptionId?: string) => void;
 }
 
 export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileStatus, setTurnstileStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const turnstileRef = useRef<TurnstileInstance>(null);
 
   const {
     control,
@@ -38,6 +46,8 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
       webhookUrl: '',
       bedroomPreferences: ['ANY'],
       pricePreferences: ['ANY'],
+      frequency: 'REAL_TIME',
+      sendTime: '09:00',
     },
   });
 
@@ -49,6 +59,8 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
     ? emailValue && emailValue.includes('@') && emailValue.length > 0
     : webhookValue && webhookValue.startsWith('http') && webhookValue.length > 0;
 
+  const canSubmit = hasValidContact && turnstileToken && turnstileStatus === 'ready';
+
   const getFirebaseFunctionUrl = (functionName: string) => {
     return process.env.NODE_ENV === 'development'
       ? `http://127.0.0.1:5001/thecannonmonitor/us-central1/${functionName}`
@@ -56,6 +68,11 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
   };
 
   const onSubmitForm = async (data: SubscriptionFormData) => {
+    if (!turnstileToken) {
+      setSubmitError('Please complete the security check');
+      return;
+    }
+
     setIsSubmitting(true);
     setSubmitError(null);
 
@@ -67,19 +84,30 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          turnstileToken,
+        }),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
+        // If the token was invalid, reset Turnstile for a new attempt
+        if (errorData.error?.includes('security') || errorData.error?.includes('bot')) {
+          turnstileRef.current?.reset();
+          setTurnstileToken(null);
+        }
         throw new Error(errorData.error || 'Failed to create subscription');
       }
 
       const result = await response.json();
       console.log('Subscription created:', result);
 
-      onSubmit(data);
+      onSubmit(data, result.subscriptionDocumentReference);
       reset();
+      // Reset Turnstile after successful submission
+      turnstileRef.current?.reset();
+      setTurnstileToken(null);
     } catch (error) {
       console.error('Error creating subscription:', error);
       setSubmitError(error instanceof Error ? error.message : 'An unexpected error occurred');
@@ -131,6 +159,33 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
 
           <FilterChips control={control} type="price" />
 
+          <FrequencyPicker control={control} />
+
+          {/* Cloudflare Turnstile - Bot Protection */}
+          <Box sx={{ mb: 3, display: 'flex', justifyContent: 'center' }}>
+            <Turnstile
+              ref={turnstileRef}
+              siteKey={TURNSTILE_SITE_KEY}
+              onSuccess={(token) => {
+                setTurnstileToken(token);
+                setTurnstileStatus('ready');
+              }}
+              onError={() => {
+                setTurnstileToken(null);
+                setTurnstileStatus('error');
+                setSubmitError('Security verification failed. Please try again.');
+              }}
+              onExpire={() => {
+                setTurnstileToken(null);
+                setTurnstileStatus('loading');
+              }}
+              options={{
+                theme: 'dark',
+                size: 'normal',
+              }}
+            />
+          </Box>
+
           {submitError && (
             <Alert severity="error" sx={{ mb: 3 }}>
               {submitError}
@@ -142,13 +197,13 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
             variant="contained"
             fullWidth
             size="large"
-            disabled={isSubmitting || !hasValidContact}
+            disabled={isSubmitting || !canSubmit}
             sx={{
               py: 1.5,
               fontSize: '1rem',
               fontWeight: 600,
               mb: 2,
-              opacity: (!hasValidContact && !isSubmitting) ? 0.5 : 1,
+              opacity: (!canSubmit && !isSubmitting) ? 0.5 : 1,
             }}
           >
             {isSubmitting ? (

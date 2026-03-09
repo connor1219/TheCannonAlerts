@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const bedroomValues = ['ANY', 'B1', 'B2', 'B3', 'B4', 'B5_PLUS'] as const;
 const priceValues = ['ANY', 'P0_399', 'P400_699', 'P700_999', 'P1000_1499', 'P1500_PLUS'] as const;
+const frequencyValues = ['REAL_TIME', 'DAILY', 'WEEKLY'] as const;
 
 export const subscriptionSchema = z.object({
   type: z.enum(['EMAIL', 'WEBHOOK']),
@@ -9,6 +10,8 @@ export const subscriptionSchema = z.object({
   webhookUrl: z.string().url('Please enter a valid webhook URL').optional().or(z.literal('')),
   bedroomPreferences: z.array(z.enum(bedroomValues)).min(1, 'Select at least one bedroom option'),
   pricePreferences: z.array(z.enum(priceValues)).min(1, 'Select at least one price option'),
+  frequency: z.enum(frequencyValues),
+  sendTime: z.string().optional().or(z.literal('')), // Format: "HH:MM" in 24-hour format
 }).refine((data) => {
   if (data.type === 'EMAIL') {
     return data.email && data.email.length > 0;
@@ -25,6 +28,7 @@ export const subscriptionSchema = z.object({
 export type SubscriptionFormData = z.infer<typeof subscriptionSchema>;
 export type BedroomValue = typeof bedroomValues[number];
 export type PriceValue = typeof priceValues[number];
+export type FrequencyValue = typeof frequencyValues[number];
 
 export const getBedroomLabel = (value: string): string => {
   const labels: Record<string, string> = {
@@ -46,6 +50,15 @@ export const getPriceLabel = (value: string): string => {
     'P700_999': '$700 - $999',
     'P1000_1499': '$1000 - $1499',
     'P1500_PLUS': '$1500+',
+  };
+  return labels[value] || value;
+};
+
+export const getFrequencyLabel = (value: string): string => {
+  const labels: Record<string, string> = {
+    'REAL_TIME': 'Real-time',
+    'DAILY': 'Daily digest',
+    'WEEKLY': 'Weekly digest',
   };
   return labels[value] || value;
 };

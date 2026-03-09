@@ -13,10 +13,12 @@ import { useStats } from '../hooks/useStats';
 export default function Home() {
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [submittedData, setSubmittedData] = useState<SubscriptionFormData | null>(null);
+  const [subscriptionId, setSubscriptionId] = useState<string | null>(null);
   const { stats, loading: statsLoading, refetch: refetchStats } = useStats();
 
-  const handleSubmit = async (data: SubscriptionFormData) => {
+  const handleSubmit = async (data: SubscriptionFormData, subscriptionId?: string) => {
     setSubmittedData(data);
+    setSubscriptionId(subscriptionId || null);
     setIsSubmitted(true);
     // Refetch stats after successful subscription
     try {
@@ -29,6 +31,7 @@ export default function Home() {
   const handleReset = () => {
     setIsSubmitted(false);
     setSubmittedData(null);
+    setSubscriptionId(null);
   };
 
   return (
@@ -87,6 +90,8 @@ export default function Home() {
                   <SuccessMessage
                     contactMethod={submittedData.type}
                     onReset={handleReset}
+                    subscriptionData={submittedData}
+                    subscriptionId={subscriptionId ?? undefined}
                   />
                 ) : (
                   <SubscriptionCard onSubmit={handleSubmit} />
