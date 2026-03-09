@@ -24,7 +24,7 @@ import {
 } from '@mui/material';
 import { Check, Close } from '@mui/icons-material';
 import { Subscription } from './SubscriptionsTable';
-import { getBedroomLabel, getPriceLabel, getFrequencyLabel } from '../schemas/subscriptionSchema';
+import { getBedroomLabel, formatPriceRange, getFrequencyLabel } from '../schemas/subscriptionSchema';
 
 interface VerificationsTableProps {
   subscriptions: Subscription[];
@@ -89,9 +89,13 @@ export function VerificationsTable({
       header: 'Bedrooms',
       cell: (info) => formatPreferences(info.getValue(), getBedroomLabel),
     }),
-    columnHelper.accessor('pricePreferences', {
+    columnHelper.accessor((row) => ({ minPrice: row.minPrice, maxPrice: row.maxPrice }), {
+      id: 'price',
       header: 'Price',
-      cell: (info) => formatPreferences(info.getValue(), getPriceLabel),
+      cell: (info) => {
+        const { minPrice, maxPrice } = info.getValue();
+        return formatPriceRange(minPrice, maxPrice);
+      },
     }),
     columnHelper.accessor('frequency', {
       header: 'Frequency',

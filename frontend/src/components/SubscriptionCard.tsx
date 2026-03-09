@@ -15,6 +15,7 @@ import { subscriptionSchema, SubscriptionFormData } from '../schemas/subscriptio
 import { ContactMethodToggle } from './ContactMethodToggle';
 import { ContactFieldGroup } from './ContactFieldGroup';
 import { FilterChips } from './FilterChips';
+import { PriceRangeInputs } from './PriceRangeInputs';
 import { FrequencyPicker } from './FrequencyPicker';
 
 // Cloudflare Turnstile site key
@@ -45,7 +46,8 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
       email: '',
       webhookUrl: '',
       bedroomPreferences: ['ANY'],
-      pricePreferences: ['ANY'],
+      minPrice: null,
+      maxPrice: null,
       frequency: 'REAL_TIME',
       sendTime: '09:00',
     },
@@ -155,9 +157,9 @@ export function SubscriptionCard({ onSubmit }: SubscriptionCardProps) {
             Notify me about...
           </Typography>
 
-          <FilterChips control={control} type="bedroom" />
+          <FilterChips control={control} />
 
-          <FilterChips control={control} type="price" />
+          <PriceRangeInputs control={control} />
 
           <FrequencyPicker control={control} />
 

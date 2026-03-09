@@ -18,6 +18,25 @@ export function renderTheCannonDigestEmail(props: TheCannonDigestEmailProps): st
   return `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">${html}`;
 }
 
+const BEDROOM_LABELS: Record<string, string> = {
+  'B1': '1 bedroom',
+  'B2': '2 bedrooms',
+  'B3': '3 bedrooms',
+  'B4': '4 bedrooms',
+  'B5_PLUS': '5+ bedrooms',
+};
+
+function getReadableBedrooms(bucket: string): string {
+  return BEDROOM_LABELS[bucket] || 'Any bedrooms';
+}
+
+function formatPriceRange(minPrice?: number | null, maxPrice?: number | null): string {
+  if (minPrice == null && maxPrice == null) return 'Any price';
+  if (minPrice != null && maxPrice == null) return `$${minPrice.toLocaleString()}+`;
+  if (minPrice == null && maxPrice != null) return `Up to $${maxPrice!.toLocaleString()}`;
+  return `$${minPrice!.toLocaleString()} - $${maxPrice!.toLocaleString()}`;
+}
+
 /**
  * Helper function to convert listing data and subscription data to email props
  */
@@ -25,37 +44,10 @@ export function createEmailPropsFromListing(
   listingData: any,
   subscription: any
 ): TheCannonAlertEmailProps {
-  const getReadableBedrooms = (bucket: string): string => {
-    switch (bucket) {
-      case 'B1': return '1 bedroom';
-      case 'B2': return '2 bedrooms';
-      case 'B3': return '3 bedrooms';
-      case 'B4': return '4 bedrooms';
-      case 'B5_PLUS': return '5+ bedrooms';
-      default: return 'Any bedrooms';
-    }
-  };
-
-  const getReadablePriceRange = (bucket: string): string => {
-    switch (bucket) {
-      case 'P0_399': return '$0-399';
-      case 'P400_699': return '$400-699';
-      case 'P700_999': return '$700-999';
-      case 'P1000_1499': return '$1000-1499';
-      case 'P1500_PLUS': return '$1500+';
-      default: return 'Any price';
-    }
-  };
-
-  const getSubscriptionBedrooms = (pref: string): string => {
-    if (pref === 'ANY') return 'Any';
-    return getReadableBedrooms(pref);
-  };
-
-  const getSubscriptionPriceRange = (pref: string): string => {
-    if (pref === 'ANY') return 'Any price';
-    return getReadablePriceRange(pref);
-  };
+  const bedroomPrefs: string[] = subscription.bedroomPreferences || ['ANY'];
+  const subscriptionBedrooms = bedroomPrefs.includes('ANY')
+    ? 'Any'
+    : bedroomPrefs.map(getReadableBedrooms).join(', ');
 
   return {
     price: listingData.price_string || `$${listingData.price_int}`,
@@ -64,8 +56,8 @@ export function createEmailPropsFromListing(
     description: listingData.description || 'No description available',
     coverImageUrl: listingData.image_url,
     listingUrl: listingData.listing_url,
-    subscriptionBedrooms: getSubscriptionBedrooms(subscription.bedroomPreference),
-    subscriptionPriceRange: getSubscriptionPriceRange(subscription.pricePreference),
+    subscriptionBedrooms,
+    subscriptionPriceRange: formatPriceRange(subscription.minPrice, subscription.maxPrice),
     postedAtText: 'Posted today',
     unsubscribeUrl: `https://thecannonalerts.ca/unsubscribe?id=${encodeURIComponent(subscription.id)}`,
     listingsOverviewUrl: 'https://thecannon.ca/housing/?wanted_forsale=forsale&sortby=date',

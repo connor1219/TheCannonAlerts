@@ -24,7 +24,7 @@ import {
   CircularProgress,
   TableSortLabel,
 } from '@mui/material';
-import { getBedroomLabel, getPriceLabel, getFrequencyLabel } from '../schemas/subscriptionSchema';
+import { getBedroomLabel, formatPriceRange, getFrequencyLabel } from '../schemas/subscriptionSchema';
 
 export interface Subscription {
   id: string;
@@ -32,7 +32,8 @@ export interface Subscription {
   email?: string;
   webhookUrl?: string;
   bedroomPreferences?: string[];
-  pricePreferences?: string[];
+  minPrice?: number | null;
+  maxPrice?: number | null;
   frequency?: string;
   sendTime?: string;
   disabled?: string | null;
@@ -150,9 +151,13 @@ export function SubscriptionsTable({
         header: 'Bedrooms',
         cell: (info) => formatPreferences(info.getValue(), getBedroomLabel),
       }),
-      columnHelper.accessor('pricePreferences', {
+      columnHelper.accessor((row) => ({ minPrice: row.minPrice, maxPrice: row.maxPrice }), {
+        id: 'price',
         header: 'Price',
-        cell: (info) => formatPreferences(info.getValue(), getPriceLabel),
+        cell: (info) => {
+          const { minPrice, maxPrice } = info.getValue();
+          return formatPriceRange(minPrice, maxPrice);
+        },
       }),
       columnHelper.accessor('frequency', {
         header: 'Frequency',

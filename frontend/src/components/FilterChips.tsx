@@ -1,11 +1,10 @@
 import React from 'react';
 import { Box, Chip, Typography } from '@mui/material';
 import { Control, Controller } from 'react-hook-form';
-import { SubscriptionFormData, BedroomValue, PriceValue } from '../schemas/subscriptionSchema';
+import { SubscriptionFormData, BedroomValue } from '../schemas/subscriptionSchema';
 
 interface FilterChipsProps {
   control: Control<SubscriptionFormData>;
-  type: 'bedroom' | 'price';
 }
 
 const bedroomOptions: { value: BedroomValue; label: string }[] = [
@@ -17,19 +16,10 @@ const bedroomOptions: { value: BedroomValue; label: string }[] = [
   { value: 'B5_PLUS', label: '5+' },
 ];
 
-const priceOptions: { value: PriceValue; label: string }[] = [
-  { value: 'ANY', label: 'Any' },
-  { value: 'P0_399', label: '$0–399' },
-  { value: 'P400_699', label: '$400–699' },
-  { value: 'P700_999', label: '$700–999' },
-  { value: 'P1000_1499', label: '$1000–1499' },
-  { value: 'P1500_PLUS', label: '$1500+' },
-];
-
-export function FilterChips({ control, type }: FilterChipsProps) {
-  const options = type === 'bedroom' ? bedroomOptions : priceOptions;
-  const fieldName = type === 'bedroom' ? 'bedroomPreferences' : 'pricePreferences' as const;
-  const sectionTitle = type === 'bedroom' ? 'BEDROOMS' : 'PRICE RANGE';
+export function FilterChips({ control }: FilterChipsProps) {
+  const options = bedroomOptions;
+  const fieldName = 'bedroomPreferences' as const;
+  const sectionTitle = 'BEDROOMS';
 
   return (
     <Box sx={{ mb: 3 }}>
@@ -86,8 +76,8 @@ export function FilterChips({ control, type }: FilterChipsProps) {
                     variant={isSelected ? 'filled' : 'outlined'}
                     onClick={() => handleToggle(option.value)}
                     sx={{
-                      minWidth: type === 'bedroom' ? 48 : 'auto',
-                      px: type === 'bedroom' ? 1 : 2,
+                      minWidth: 48,
+                      px: 1,
                     }}
                   />
                 );
