@@ -39,6 +39,9 @@
       "enabled": true,
       "port": 5008
     },
+    "auth": {
+      "port": 9099
+    },
     "singleProjectMode": true
   },
   "hosting": [
