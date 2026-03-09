@@ -172,24 +172,6 @@ def get_bedroom_bucket(bedroom_count):
     
     return "UNKNOWN"
 
-def get_price_bucket(price_int):
-    """
-    Convert price to bucket format for matching
-    """
-    if not price_int or price_int <= 0:
-        return "UNKNOWN"
-    
-    if price_int <= 399:
-        return "P0_399"
-    elif price_int <= 699:
-        return "P400_699"
-    elif price_int <= 999:
-        return "P700_999"
-    elif price_int <= 1499:
-        return "P1000_1499"
-    else:
-        return "P1500_PLUS"
-
 def get_active_subscriptions():
     """
     Fetch all active (non-disabled) and verified subscriptions from Firestore.
@@ -208,16 +190,9 @@ def get_active_subscriptions():
             subscription_data['id'] = doc.id
             
             if subscription_data.get('disabled') is None:
-                # For EMAIL subscriptions, check if verified
-                # Webhooks are always verified, or if isVerified field doesn't exist (legacy), allow it
                 sub_type = subscription_data.get('type')
                 is_verified = subscription_data.get('isVerified')
-                
-                # Allow if:
-                # - WEBHOOK type (always verified)
-                # - isVerified is True
-                # - isVerified field doesn't exist (legacy subscriptions)
-                if sub_type == 'WEBHOOK' or is_verified is True or is_verified is None:
+                if sub_type == 'WEBHOOK' or is_verified is True:
                     active_subscriptions.append(subscription_data)
         
         return active_subscriptions
@@ -229,8 +204,7 @@ def get_active_subscriptions():
 def find_matching_subscriptions(listing_data, frequency_filter=None):
     """
     Find subscriptions that match the given listing.
-    Supports both legacy single-value preferences and new array-based preferences.
-    
+
     Args:
         listing_data: The listing data to match against
         frequency_filter: Optional. If provided, only return subscriptions with this frequency.
@@ -240,8 +214,8 @@ def find_matching_subscriptions(listing_data, frequency_filter=None):
     active_subscriptions = get_active_subscriptions()
     
     listing_bedroom_bucket = listing_data.get('bedroom_bucket')
-    listing_price_bucket = listing_data.get('price_bucket')
-    
+    listing_price_int = listing_data.get('price_int')
+
     # Normalize frequency_filter to a list
     if frequency_filter is None:
         frequency_list = None
@@ -249,28 +223,21 @@ def find_matching_subscriptions(listing_data, frequency_filter=None):
         frequency_list = [frequency_filter]
     else:
         frequency_list = frequency_filter
-    
+
     for subscription in active_subscriptions:
         # Check frequency filter first
         sub_frequency = subscription.get('frequency', 'REAL_TIME')
         if frequency_list is not None and sub_frequency not in frequency_list:
             continue
-        
-        # Support both legacy (single value) and new (array) formats
-        bedroom_prefs = subscription.get('bedroomPreferences')
-        if bedroom_prefs is None:
-            # Legacy format - convert single value to list
-            bedroom_prefs = [subscription.get('bedroomPreference', 'ANY')]
-        
-        price_prefs = subscription.get('pricePreferences')
-        if price_prefs is None:
-            # Legacy format - convert single value to list
-            price_prefs = [subscription.get('pricePreference', 'ANY')]
-        
+
+        bedroom_prefs = subscription.get('bedroomPreferences', ['ANY'])
+        sub_min = subscription.get('minPrice')
+        sub_max = subscription.get('maxPrice')
+
         bedroom_match = ('ANY' in bedroom_prefs or listing_bedroom_bucket in bedroom_prefs)
-        price_match = ('ANY' in price_prefs or listing_price_bucket in price_prefs)
-        
-        if bedroom_match and price_match:
+        p_match = price_matches(listing_price_int, sub_min, sub_max)
+
+        if bedroom_match and p_match:
             matching_subscriptions.append(subscription)
     return matching_subscriptions
 
@@ -287,33 +254,53 @@ def get_readable_bedrooms(bucket):
     }
     return bedroom_map.get(bucket, 'Unknown bedrooms')
 
-def get_readable_price_range(bucket):
+def format_price_range(min_price, max_price):
     """
-    Convert price bucket to readable format
+    Format min/max price values into a human-readable string
     """
-    price_map = {
-        'P0_399': '$0-399',
-        'P400_699': '$400-699',
-        'P700_999': '$700-999', 
-        'P1000_1499': '$1000-1499',
-        'P1500_PLUS': '$1500+'
-    }
-    return price_map.get(bucket, 'Any price')
+    if min_price is None and max_price is None:
+        return 'Any price'
+    elif min_price is not None and max_price is None:
+        return f'${min_price:,}+'
+    elif min_price is None and max_price is not None:
+        return f'Up to ${max_price:,}'
+    else:
+        return f'${min_price:,} - ${max_price:,}'
+
+
+def price_matches(price_int, min_price, max_price):
+    """
+    Check if a listing's price matches the subscription's min/max bounds.
+    Returns True if no bounds are set.
+    """
+    if min_price is None and max_price is None:
+        return True
+    if not price_int or price_int <= 0:
+        return False
+    if min_price is not None and price_int < min_price:
+        return False
+    if max_price is not None and price_int > max_price:
+        return False
+    return True
+
+
+def price_intervals_overlap(min1, max1, min2, max2):
+    """
+    Check if two price intervals overlap.
+    None means unbounded (no min = 0, no max = infinity).
+    """
+    left1_gt_right2 = min1 is not None and max2 is not None and min1 > max2
+    left2_gt_right1 = min2 is not None and max1 is not None and min2 > max1
+    return not (left1_gt_right2 or left2_gt_right1)
+
 
 def render_email_via_api(listing_data, subscription):
     """
     Call the Next.js API to render the React Email template
     """
     try:
-        # Support both legacy (single value) and new (array) formats
-        bedroom_prefs = subscription.get('bedroomPreferences')
-        if bedroom_prefs is None:
-            bedroom_prefs = [subscription.get('bedroomPreference', 'ANY')]
-        
-        price_prefs = subscription.get('pricePreferences')
-        if price_prefs is None:
-            price_prefs = [subscription.get('pricePreference', 'ANY')]
-        
+        bedroom_prefs = subscription.get('bedroomPreferences', ['ANY'])
+
         # Format bedroom preferences for display
         if 'ANY' in bedroom_prefs:
             readable_sub_bedrooms = 'Any'
@@ -321,15 +308,9 @@ def render_email_via_api(listing_data, subscription):
             readable_sub_bedrooms = get_readable_bedrooms(bedroom_prefs[0])
         else:
             readable_sub_bedrooms = ', '.join([get_readable_bedrooms(b) for b in bedroom_prefs])
-        
-        # Format price preferences for display
-        if 'ANY' in price_prefs:
-            readable_sub_price = 'Any price'
-        elif len(price_prefs) == 1:
-            readable_sub_price = get_readable_price_range(price_prefs[0])
-        else:
-            readable_sub_price = ', '.join([get_readable_price_range(p) for p in price_prefs])
-        
+
+        readable_sub_price = format_price_range(subscription.get('minPrice'), subscription.get('maxPrice'))
+
         email_props = {
             'price': listing_data.get('price_string', f'${listing_data.get("price_int", "Unknown")}'),
             'bedrooms': get_readable_bedrooms(listing_data.get('bedroom_bucket', '')),
@@ -452,15 +433,8 @@ def render_digest_email_via_api(listings_data, subscription, digest_type):
     Call the Next.js API to render the React Email digest template
     """
     try:
-        # Support both legacy (single value) and new (array) formats
-        bedroom_prefs = subscription.get('bedroomPreferences')
-        if bedroom_prefs is None:
-            bedroom_prefs = [subscription.get('bedroomPreference', 'ANY')]
-        
-        price_prefs = subscription.get('pricePreferences')
-        if price_prefs is None:
-            price_prefs = [subscription.get('pricePreference', 'ANY')]
-        
+        bedroom_prefs = subscription.get('bedroomPreferences', ['ANY'])
+
         # Format bedroom preferences for display
         if 'ANY' in bedroom_prefs:
             readable_sub_bedrooms = 'Any'
@@ -468,15 +442,9 @@ def render_digest_email_via_api(listings_data, subscription, digest_type):
             readable_sub_bedrooms = get_readable_bedrooms(bedroom_prefs[0])
         else:
             readable_sub_bedrooms = ', '.join([get_readable_bedrooms(b) for b in bedroom_prefs])
-        
-        # Format price preferences for display
-        if 'ANY' in price_prefs:
-            readable_sub_price = 'Any price'
-        elif len(price_prefs) == 1:
-            readable_sub_price = get_readable_price_range(price_prefs[0])
-        else:
-            readable_sub_price = ', '.join([get_readable_price_range(p) for p in price_prefs])
-        
+
+        readable_sub_price = format_price_range(subscription.get('minPrice'), subscription.get('maxPrice'))
+
         # Format listings for the digest email
         formatted_listings = []
         for listing in listings_data:
@@ -710,17 +678,10 @@ def send_verification_webhook_notification(subscription_data, subscription_id):
             print("VERIFICATION_WEBHOOK_URL not configured, skipping notification")
             return False
         
-        # Format bedroom preferences
-        bedroom_prefs = subscription_data.get('bedroomPreferences', [])
-        if not bedroom_prefs:
-            bedroom_prefs = [subscription_data.get('bedroomPreference', 'ANY')]
+        bedroom_prefs = subscription_data.get('bedroomPreferences', ['ANY'])
         bedroom_display = ', '.join([get_readable_bedrooms(b) for b in bedroom_prefs]) if 'ANY' not in bedroom_prefs else 'Any'
         
-        # Format price preferences
-        price_prefs = subscription_data.get('pricePreferences', [])
-        if not price_prefs:
-            price_prefs = [subscription_data.get('pricePreference', 'ANY')]
-        price_display = ', '.join([get_readable_price_range(p) for p in price_prefs]) if 'ANY' not in price_prefs else 'Any price'
+        price_display = format_price_range(subscription_data.get('minPrice'), subscription_data.get('maxPrice'))
         
         # Format frequency
         frequency = subscription_data.get('frequency', 'REAL_TIME')
@@ -975,8 +936,6 @@ def ingestListingDetails(listing_url):
         additional_details['features'] = features
 
     bedroom_bucket = get_bedroom_bucket(bedroom_count)
-    
-    price_bucket = get_price_bucket(price)
 
     listingData = {
         'listing_url': listing_url,
@@ -987,7 +946,6 @@ def ingestListingDetails(listing_url):
         'price_string': price_string,
         'bedroom_count': bedroom_count,
         'bedroom_bucket': bedroom_bucket,
-        'price_bucket': price_bucket,
         'additional_details': additional_details
     }
     return listingData
@@ -1043,13 +1001,12 @@ def create_subscription(req: https_fn.Request) -> https_fn.Response:
         "email": "user@example.com" (required if type is EMAIL),
         "webhookUrl": "https://example.com/webhook" (required if type is WEBHOOK),
         "bedroomPreferences": ["ANY"] | ["B1", "B2", ...] (array of bedroom preferences),
-        "pricePreferences": ["ANY"] | ["P0_399", "P400_699", ...] (array of price preferences),
+        "minPrice": 500 (optional integer, no lower bound if omitted),
+        "maxPrice": 1200 (optional integer, no upper bound if omitted),
         "userId": "optional-user-id" (for user-based doc IDs),
         "turnstileToken": "cloudflare-turnstile-token" (required for bot protection)
     }
     
-    Note: Legacy single-value format (bedroomPreference, pricePreference) is still supported
-    for backwards compatibility but new subscriptions should use the array format.
     """
     
     if req.method == 'OPTIONS':
@@ -1282,60 +1239,49 @@ def validate_subscription_data(data):
     """
     Validate subscription data
     Returns: {"error": None} if valid, {"error": "message"} if invalid
-    Supports both legacy single-value and new array-based preferences.
     """
     
     VALID_TYPES = ["EMAIL", "WEBHOOK"]
     VALID_BEDROOM_PREFS = ["ANY", "B1", "B2", "B3", "B4", "B5_PLUS"]
-    VALID_PRICE_PREFS = ["ANY", "P0_399", "P400_699", "P700_999", "P1000_1499", "P1500_PLUS"]
     VALID_FREQUENCIES = ["REAL_TIME", "DAILY", "WEEKLY"]
-    
+
     if "type" not in data:
         return {"error": "Missing required field: type"}
-    
+
     if data["type"] not in VALID_TYPES:
         return {"error": f"Invalid type. Must be one of: {', '.join(VALID_TYPES)}"}
-    
+
     if data["type"] == "EMAIL":
         if not data.get("email"):
             return {"error": "Email is required when type is EMAIL"}
         if "@" not in data["email"]:
             return {"error": "Invalid email format"}
-    
+
     if data["type"] == "WEBHOOK":
         if not data.get("webhookUrl"):
             return {"error": "webhookUrl is required when type is WEBHOOK"}
         if not data["webhookUrl"].startswith(("http://", "https://")):
             return {"error": "Invalid webhook URL format"}
-    
-    # Support both legacy (single value) and new (array) formats for bedroom preferences
+
     bedroom_prefs = data.get("bedroomPreferences")
-    if bedroom_prefs is not None:
-        if not isinstance(bedroom_prefs, list) or len(bedroom_prefs) == 0:
-            return {"error": "bedroomPreferences must be a non-empty array"}
-        for pref in bedroom_prefs:
-            if pref not in VALID_BEDROOM_PREFS:
-                return {"error": f"Invalid bedroom preference '{pref}'. Must be one of: {', '.join(VALID_BEDROOM_PREFS)}"}
-    else:
-        # Legacy single value format
-        bedroom_pref = data.get("bedroomPreference", "ANY")
-        if bedroom_pref not in VALID_BEDROOM_PREFS:
-            return {"error": f"Invalid bedroomPreference. Must be one of: {', '.join(VALID_BEDROOM_PREFS)}"}
-    
-    # Support both legacy (single value) and new (array) formats for price preferences
-    price_prefs = data.get("pricePreferences")
-    if price_prefs is not None:
-        if not isinstance(price_prefs, list) or len(price_prefs) == 0:
-            return {"error": "pricePreferences must be a non-empty array"}
-        for pref in price_prefs:
-            if pref not in VALID_PRICE_PREFS:
-                return {"error": f"Invalid price preference '{pref}'. Must be one of: {', '.join(VALID_PRICE_PREFS)}"}
-    else:
-        # Legacy single value format
-        price_pref = data.get("pricePreference", "ANY")
-        if price_pref not in VALID_PRICE_PREFS:
-            return {"error": f"Invalid pricePreference. Must be one of: {', '.join(VALID_PRICE_PREFS)}"}
-    
+    if not isinstance(bedroom_prefs, list) or len(bedroom_prefs) == 0:
+        return {"error": "bedroomPreferences must be a non-empty array"}
+    for pref in bedroom_prefs:
+        if pref not in VALID_BEDROOM_PREFS:
+            return {"error": f"Invalid bedroom preference '{pref}'. Must be one of: {', '.join(VALID_BEDROOM_PREFS)}"}
+
+    # Validate minPrice / maxPrice (both optional integers >= 0)
+    min_price = data.get("minPrice")
+    max_price = data.get("maxPrice")
+    if min_price is not None:
+        if not isinstance(min_price, int) or min_price < 0:
+            return {"error": "minPrice must be a non-negative integer"}
+    if max_price is not None:
+        if not isinstance(max_price, int) or max_price < 0:
+            return {"error": "maxPrice must be a non-negative integer"}
+    if min_price is not None and max_price is not None and min_price > max_price:
+        return {"error": "minPrice must be less than or equal to maxPrice"}
+
     # Validate frequency (optional, defaults to REAL_TIME)
     frequency = data.get("frequency", "REAL_TIME")
     if frequency not in VALID_FREQUENCIES:
@@ -1358,8 +1304,6 @@ def check_existing_subscription(data):
     Overlap occurs when a listing could match BOTH subscriptions, which happens when:
     - There's at least one bedroom value in common (or either has ANY)
     - AND there's at least one price value in common (or either has ANY)
-    
-    Supports both legacy single-value and new array-based preferences.
     Returns: {"exists": bool, "disabled": bool, "subscription_id": str, "overlap": bool, "overlap_details": str}
     """
     try:
@@ -1374,40 +1318,31 @@ def check_existing_subscription(data):
         
         query = query.where('type', '==', data["type"])
         
-        # Get the preferences from the incoming data (support both formats)
-        incoming_bedroom_prefs = data.get("bedroomPreferences")
-        if incoming_bedroom_prefs is None:
-            incoming_bedroom_prefs = [data.get("bedroomPreference", "ANY")]
+        incoming_bedroom_prefs = data.get("bedroomPreferences", ["ANY"])
         incoming_bedroom_set = set(incoming_bedroom_prefs)
-        
-        incoming_price_prefs = data.get("pricePreferences")
-        if incoming_price_prefs is None:
-            incoming_price_prefs = [data.get("pricePreference", "ANY")]
-        incoming_price_set = set(incoming_price_prefs)
-        
+
+        incoming_min = data.get("minPrice")
+        incoming_max = data.get("maxPrice")
+
         docs = query.stream()
-        
+
         for doc in docs:
             subscription_data = doc.to_dict()
-            
+
             # Skip disabled subscriptions
             if subscription_data.get('disabled') is not None:
                 continue
-            
-            # Get existing subscription's preferences (support both formats)
-            existing_bedroom_prefs = subscription_data.get('bedroomPreferences')
-            if existing_bedroom_prefs is None:
-                existing_bedroom_prefs = [subscription_data.get('bedroomPreference', 'ANY')]
+
+            existing_bedroom_prefs = subscription_data.get('bedroomPreferences', ['ANY'])
             existing_bedroom_set = set(existing_bedroom_prefs)
-            
-            existing_price_prefs = subscription_data.get('pricePreferences')
-            if existing_price_prefs is None:
-                existing_price_prefs = [subscription_data.get('pricePreference', 'ANY')]
-            existing_price_set = set(existing_price_prefs)
-            
-            # Check for exact match (same filters)
+
+            # Get existing subscription's price bounds
+            existing_min = subscription_data.get('minPrice')
+            existing_max = subscription_data.get('maxPrice')
+
+            # Check for exact match
             if sorted(existing_bedroom_prefs) == sorted(incoming_bedroom_prefs) and \
-               sorted(existing_price_prefs) == sorted(incoming_price_prefs):
+               existing_min == incoming_min and existing_max == incoming_max:
                 return {
                     "exists": True,
                     "disabled": False,
@@ -1415,39 +1350,32 @@ def check_existing_subscription(data):
                     "overlap": False,
                     "overlap_details": None
                 }
-            
+
             # Check for overlapping preferences
-            # Overlap in bedrooms: either has ANY, or there's intersection
-            has_bedroom_overlap = ('ANY' in incoming_bedroom_set or 
-                                  'ANY' in existing_bedroom_set or 
-                                  bool(incoming_bedroom_set & existing_bedroom_set))
-            
-            # Overlap in prices: either has ANY, or there's intersection
-            has_price_overlap = ('ANY' in incoming_price_set or 
-                                'ANY' in existing_price_set or 
-                                bool(incoming_price_set & existing_price_set))
-            
-            # Only block if BOTH dimensions overlap (a listing could match both subscriptions)
+            has_bedroom_overlap = ('ANY' in incoming_bedroom_set or
+                                   'ANY' in existing_bedroom_set or
+                                   bool(incoming_bedroom_set & existing_bedroom_set))
+
+            has_price_overlap = price_intervals_overlap(incoming_min, incoming_max, existing_min, existing_max)
+
             if has_bedroom_overlap and has_price_overlap:
-                # Build helpful error message
                 if 'ANY' in incoming_bedroom_set or 'ANY' in existing_bedroom_set:
                     bedroom_overlap_str = "any bedrooms"
                 else:
                     overlap_bedrooms = incoming_bedroom_set & existing_bedroom_set
                     bedroom_overlap_str = ", ".join(sorted(overlap_bedrooms))
-                
-                if 'ANY' in incoming_price_set or 'ANY' in existing_price_set:
-                    price_overlap_str = "any price"
-                else:
-                    overlap_prices = incoming_price_set & existing_price_set
-                    price_overlap_str = ", ".join(sorted(overlap_prices))
-                
+
+                price_overlap_str = (
+                    f"{format_price_range(incoming_min, incoming_max)} overlaps with "
+                    f"{format_price_range(existing_min, existing_max)}"
+                )
+
                 return {
                     "exists": False,
                     "disabled": False,
                     "subscription_id": None,
                     "overlap": True,
-                    "overlap_details": f"Your new subscription overlaps with an existing one. Overlapping filters: bedrooms ({bedroom_overlap_values}), prices ({price_overlap_values}). Please choose non-overlapping filters."
+                    "overlap_details": f"Your new subscription overlaps with an existing one. Overlapping filters: bedrooms ({bedroom_overlap_str}), prices ({price_overlap_str}). Please choose non-overlapping filters."
                 }
         
         return {"exists": False, "disabled": False, "subscription_id": None, "overlap": False, "overlap_details": None}
@@ -1484,34 +1412,28 @@ def create_subscription_document(data):
     Stores preferences in the new array format.
     Returns: document reference
     """
-    # Convert to array format if legacy single-value format is used
-    bedroom_prefs = data.get("bedroomPreferences")
-    if bedroom_prefs is None:
-        bedroom_prefs = [data.get("bedroomPreference", "ANY")]
-    
-    price_prefs = data.get("pricePreferences")
-    if price_prefs is None:
-        price_prefs = [data.get("pricePreference", "ANY")]
-    
+    bedroom_prefs = data.get("bedroomPreferences", ["ANY"])
+
     # Get frequency and sendTime (defaults to REAL_TIME)
     frequency = data.get("frequency", "REAL_TIME")
     send_time = data.get("sendTime", "").strip() or None
-    
+
     # Webhooks are auto-verified, emails need manual verification
     is_verified = data["type"] == "WEBHOOK"
-    
+
     subscription_data = {
         "type": data["type"],
         "email": data.get("email"),
         "webhookUrl": data.get("webhookUrl"),
         "bedroomPreferences": bedroom_prefs,
-        "pricePreferences": price_prefs,
+        "minPrice": data.get("minPrice"),
+        "maxPrice": data.get("maxPrice"),
         "frequency": frequency,
         "sendTime": send_time,
         "disabled": None,
         "createdAt": datetime.now(),
-        "lastDigestSentAt": None,  # Track when the last digest was sent
-        "isVerified": is_verified,  # Webhooks auto-verified, emails need admin verification
+        "lastDigestSentAt": None,
+        "isVerified": is_verified,
     }
     
     db = get_firestore_client()
@@ -1897,22 +1819,18 @@ def send_digest_notifications_core(frequency, current_hour=None):
             # Filter listings that match this subscription's preferences
             matching_listings = []
             
-            bedroom_prefs = subscription.get('bedroomPreferences')
-            if bedroom_prefs is None:
-                bedroom_prefs = [subscription.get('bedroomPreference', 'ANY')]
-            
-            price_prefs = subscription.get('pricePreferences')
-            if price_prefs is None:
-                price_prefs = [subscription.get('pricePreference', 'ANY')]
-            
+            bedroom_prefs = subscription.get('bedroomPreferences', ['ANY'])
+            sub_min = subscription.get('minPrice')
+            sub_max = subscription.get('maxPrice')
+
             for listing in all_listings:
                 listing_bedroom_bucket = listing.get('bedroom_bucket')
-                listing_price_bucket = listing.get('price_bucket')
-                
+                listing_price_int = listing.get('price_int')
+
                 bedroom_match = ('ANY' in bedroom_prefs or listing_bedroom_bucket in bedroom_prefs)
-                price_match = ('ANY' in price_prefs or listing_price_bucket in price_prefs)
-                
-                if bedroom_match and price_match:
+                p_match = price_matches(listing_price_int, sub_min, sub_max)
+
+                if bedroom_match and p_match:
                     matching_listings.append(listing)
             
             # Send digest even if no matching listings (to confirm subscription is active)
@@ -2071,7 +1989,6 @@ def get_all_subscriptions(req: https_fn.Request) -> https_fn.Response:
             data['id'] = doc.id
             
             # Skip unverified EMAIL subscriptions (they appear in verifications page instead)
-            # Include: WEBHOOK (always verified), verified EMAIL, or legacy subscriptions (isVerified not set)
             if data.get('type') == 'EMAIL' and data.get('isVerified') is False:
                 continue
             
@@ -2231,10 +2148,7 @@ def get_pending_verifications(req: https_fn.Request) -> https_fn.Response:
             data = doc.to_dict()
             data['id'] = doc.id
             
-            # Only include:
-            # - EMAIL type subscriptions
-            # - Not disabled
-            # - isVerified is explicitly False (not None for legacy support)
+            # Only include EMAIL subscriptions that are not disabled and not yet verified
             if (data.get('type') == 'EMAIL' and 
                 data.get('disabled') is None and 
                 data.get('isVerified') is False):
@@ -2433,3 +2347,5 @@ def admin_decline_subscription(req: https_fn.Request) -> https_fn.Response:
             status=500,
             headers={'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}
         )
+
+
